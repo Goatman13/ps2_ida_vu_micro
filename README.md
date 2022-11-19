@@ -15,5 +15,3 @@
 
 ## Preview
 ![preview](https://user-images.githubusercontent.com/101417270/202868009-e89f557e-d267-40b8-8ff5-433314c5a2e1.jpg)
-
-**Don't bother to create issue, prs are welcome.**
