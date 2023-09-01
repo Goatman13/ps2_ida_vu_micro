@@ -1,10 +1,12 @@
 from ida_bytes import *
 from idaapi import *
 from idc import *
-import idaapi as ida
+import idaapi
 import ida_bytes
 import idc
 import binascii
+
+MAKE_CREFS = 1
 
 def get_special_bit(instruction):
 
@@ -463,7 +465,13 @@ def iaddi(address, instruction):
 	reg1 = (instruction >> 11) & 0xF
 	dest = (instruction >> 16) & 0xF
 	imm5 = (instruction >> 6) & 0x1F
-	string = "iaddi         vi{:d}, vi{:d}, 0x{:X}"
+	sign = ""
+	if imm5 > 0xF:
+		imm5 = ~imm5
+		imm5 &= 0xF
+		imm5 += 1
+		sign = "-"
+	string = "iaddi         vi{:d}, vi{:d}, " + sign + "0x{:X}"
 	set_manual_insn(address, string.format(dest, reg1, imm5))	
 
 def iand(address, instruction):
@@ -865,8 +873,6 @@ def loadstore_imm(address, string, instruction):
 	if (imm > 0x3FF):
 		imm = ~imm
 		imm &= 0x3FF
-		if (imm == 0):
-			imm = 0x400
 		imm += 1
 		sign = "-"
 	imm *= 16 
@@ -888,18 +894,6 @@ def arithu(address, string, instruction):
 	dest = (instruction >> 16) & 0x1F
 	imm = instruction & 0x7FF
 	imm |= ((instruction >> 21) & 0xF) << 11
-	#if (imm > 0x3FFF):
-	#	imm = ~imm
-	#	imm &= 0x3FFF
-	#	imm += 1
-	#	
-	#	while len(string) < 13:
-	#		string += " "
-	#
-	#	string = string + " vi{:d}, vi{:d}, -0x{:X}"
-	#	set_manual_insn(address, string.format(dest, source, imm))
-	#	return
-	
 	while len(string) < 13:
 		string += " "
 	
@@ -909,16 +903,15 @@ def arithu(address, string, instruction):
 
 def branch(address, string, instruction):
 
-	imm = instruction & 0x7FF #fixme: negative offset
+	imm = instruction & 0x7FF
 	_is = (instruction >> 11) & 0x1F
 	it = (instruction >> 16) & 0x1F
 	if (imm > 0x3FF):
+		imm &= 0x3FF
 		imm = ~imm
 		imm &= 0x3FF
-		if (imm == 0):
-			imm = 0x400
 		imm *= 8
-		addr = (address - imm) #+ 8
+		addr = (address - imm)
 		addr -= skip_vif_data(addr, address)
 		
 		while len(string) < 13:
@@ -926,13 +919,15 @@ def branch(address, string, instruction):
 		
 		string = string + " vi{:d}, vi{:d}, 0x{:X}"
 		set_manual_insn(address, string.format(it, _is, addr))
-		#add_cref(address, addr, 50)
+		if(MAKE_CREFS == 1):
+			add_cref(address, addr, fl_JN | XREF_USER)
 		return
 		
 	imm *= 8
 	addr = address + imm + 8
 	addr += skip_vif_data(address, addr)
-
+	if(MAKE_CREFS == 1):
+		add_cref(address, addr, fl_JN | XREF_USER)
 	while len(string) < 13:
 		string += " "	
 	
@@ -942,13 +937,12 @@ def branch(address, string, instruction):
 
 def branch_zero(address, string, instruction):
 
-	imm = instruction & 0x7FF #fixme: negative offset
+	imm = instruction & 0x7FF
 	reg = (instruction >> 11) & 0x1F
 	if (imm > 0x3FF):
+		imm &= 0x3FF
 		imm = ~imm
 		imm &= 0x3FF
-		if (imm == 0):
-			imm = 0x400
 		imm *= 8
 		addr = (address - imm) #+ 8
 		addr -= skip_vif_data(addr, address)
@@ -958,13 +952,15 @@ def branch_zero(address, string, instruction):
 		
 		string = string + " vi{:d}, 0x{:X}"
 		set_manual_insn(address, string.format(reg, addr))
-		#add_cref(address, addr, 50)
+		if(MAKE_CREFS == 1):
+			add_cref(address, addr, fl_JN | XREF_USER)
 		return
 	
 	imm *= 8
 	addr = address + imm + 8
 	addr += skip_vif_data(address, addr)
-	
+	if(MAKE_CREFS == 1):
+		add_cref(address, addr, fl_JN | XREF_USER)	
 	while len(string) < 13:
 		string += " "
 	
@@ -979,8 +975,6 @@ def lq(address, instruction):
 	if (imm > 0x3FF):
 		imm = ~imm
 		imm &= 0x3FF
-		if (imm == 0):
-			imm = 0x400
 		imm += 1
 		sign = "-"
 	imm *= 16 
@@ -1003,8 +997,6 @@ def sq(address, instruction):
 	if (imm > 0x3FF):
 		imm = ~imm
 		imm &= 0x3FF
-		if (imm == 0):
-			imm = 0x400
 		imm += 1
 		sign = "-"
 	imm *= 16 
@@ -1114,15 +1106,14 @@ def b(address, instruction):
 
 	imm = instruction & 0x7FF
 	if (imm > 0x3FF):
+		imm &= 0x3FF
 		imm = ~imm
 		imm &= 0x3FF
-		if (imm == 0):
-			imm = 0x400
 		imm *= 8
-		
 		addr = (address - imm)
 		addr -= skip_vif_data(addr, address)
-
+		if(MAKE_CREFS == 1):
+			add_cref(address, addr, fl_JN | XREF_USER)
 		string = "b             0x{:X}"
 		set_manual_insn(address, string.format(addr))
 		return
@@ -1130,7 +1121,8 @@ def b(address, instruction):
 	imm *= 8
 	addr = address + imm + 8
 	addr += skip_vif_data(address, addr)
-	
+	if(MAKE_CREFS == 1):
+		add_cref(address, addr, fl_JN | XREF_USER)	
 	string = "b             0x{:X}"
 	set_manual_insn(address, string.format(addr))
 
@@ -1138,18 +1130,16 @@ def b(address, instruction):
 def bal(address, instruction):
 
 	imm = instruction & 0x7FF
-	#imm = ((auto)(imm << 5)) >> 5
 	link_reg = (instruction >> 16) & 0x1F
 	if (imm > 0x3FF):
+		imm &= 0x3FF
 		imm = ~imm
 		imm &= 0x3FF
-		if (imm == 0):
-			imm = 0x400
 		imm *= 8
-		
 		addr = (address - imm)
 		addr -= skip_vif_data(addr, address)
-		
+		if(MAKE_CREFS == 1):
+			add_cref(address, addr, fl_CN | XREF_USER)		
 		string = "bal           vi{:d} 0x{:X}"
 		set_manual_insn(address, string.format(link_reg, addr))
 		return
@@ -1165,6 +1155,8 @@ def bal(address, instruction):
 def jr(address, instruction):
 
 	addr_reg = (instruction >> 11) & 0x1F
+	#if(MAKE_CREFS == 1):
+	#	add_cref(address, addr, fl_JN | XREF_USER)
 	string = "jr            vi{:d}"
 	set_manual_insn(address, string.format(addr_reg))
 
@@ -1173,6 +1165,8 @@ def jalr(address, instruction):
 
 	addr_reg = (instruction >> 11) & 0x1F
 	link_reg = (instruction >> 16) & 0x1F
+	#if(MAKE_CREFS == 1):
+	#	add_cref(address, addr, fl_CN | XREF_USER)
 	string = "jalr          vi{:d}, vi{:d}"
 	set_manual_insn(address, string.format(link_reg, addr_reg))
 
@@ -1727,42 +1721,109 @@ def mark_code(address, end):
 		address += 4
 	return 0
 
-def vu2_helper():
+def vu_helper(start):
 	
-	found_code = 0
-	search = "ff 02 00 00 3c 03 00 80"
-	address = idaapi.find_binary(0, ida_idaapi.BADADDR, search, 0x10, SEARCH_DOWN)
-	start = get_segm_start(address)
-	#print(hex(address))
-	#print(hex(start))
-	overflow_check = 0
-	while (address > start):
-		mpg_check = get_dword(address)
-		if ((mpg_check >> 24) == 0x4A):
-			end = address + calculate_mpg_size(address)
-			#print(hex(address))
-			#print(hex(end))
-			mark_code(address, end)
-			found_code = 1
-			break			
+	end = start + calculate_mpg_size(start)
+	print(hex(start))
+	print(hex(end))
+	mark_code(start, end)
 
-		address -= 4
-		overflow_check += 1
-		if overflow_check == 100:
-			break
+def vu_single_line():
+	
+	start_addr = read_selection_start()
+	end_addr = read_selection_end()
+	if(start_addr == BADADDR):
+		start_addr = get_screen_ea();
+		end_addr = start_addr + 4;
+		
+	mark_code(start_addr, end_addr)
 
-	if found_code == 0 or get_segm_end(end) > end + 0x50:
-		address = 0
-		while address != idaapi.BADADDR:
-			search = "ff 02 00 00 3c 03 00 80"
-			address = idaapi.find_binary(address, ida_idaapi.BADADDR, search, 0x10, SEARCH_DOWN)
-			if get_segm_name(address) == ".vudata" or get_segm_name(address) == ".vutext":
-				#print(get_segm_start(address))
-				#print(get_segm_end(address))
-				mark_code(get_segm_start(address), get_segm_end(address))
-			address = get_next_seg(address)
+def vu_mpg_4A():
+	
+	ea = get_screen_ea()
+	if (get_dword(ea) >> 24) == 0x4A:
+		vu_helper(get_screen_ea())
+		
+	else:
+		print("To start plugin you need to specify line with VIF MPG command")
 
-vu2_helper()
+class ActionHandler(idaapi.action_handler_t):
 
-#manual
-#mark_code(0x4E0F08, 0x4E23E8)
+    def __init__(self, callback):
+        
+        idaapi.action_handler_t.__init__(self)
+        self.callback = callback
+    
+    def activate(self, ctx):
+
+        self.callback()
+        return 1
+
+    def update(self, ctx):
+        
+        return idaapi.AST_ENABLE_ALWAYS
+
+def register_actions():   
+
+    actions = [
+        {
+            'id': 'start:vu_single_line',
+            'name': 'Disassemble Marked VU Code',
+            'hotkey': 'F10',
+            'comment': 'Disassemble Marked VU Code',
+            'callback': vu_single_line,
+            'menu_location': ''
+        },
+        {
+            'id': 'start:vu_mpg_4A',
+            'name': 'Disassemble VU Code using VIF MPG',
+            'hotkey': 'Alt-Shift-5',
+            'comment': 'Disassemble VU Code using VIF MPG',
+            'callback': vu_mpg_4A,
+            'menu_location': ''
+        }
+    ]
+
+
+    for action in actions:
+
+        if not idaapi.register_action(idaapi.action_desc_t(
+            action['id'], # Must be the unique item
+            action['name'], # The name the user sees
+            ActionHandler(action['callback']), # The function to call
+            action['hotkey'], # A shortcut, if any (optional)
+            action['comment'] # A comment, if any (optional)
+        )):
+
+            print('Failed to register ' + action['id'])
+
+        #if not idaapi.attach_action_to_menu(
+        #    action['menu_location'], # The menu location
+        #    action['id'], # The unique function ID
+        #    0):
+		#
+        #    print('Failed to attach to menu '+ action['id'])
+
+class vu_helper_t(idaapi.plugin_t):
+	flags = idaapi.PLUGIN_HIDE
+	comment = "VU. "
+	help = "Analyze VU"
+	wanted_name = "Start VUE Analyze"
+	wanted_hotkey = "Alt-Shift-5"
+
+	def init(self):
+		if (idaapi.ph.id == idaapi.PLFM_MIPS and ida_ida.inf_get_procname() == 'r5900l'):
+			register_actions()
+			idaapi.msg("Analyze VU loaded.\n")
+			return idaapi.PLUGIN_KEEP
+
+		return idaapi.PLUGIN_SKIP
+	
+	def run(self, arg):
+		idaapi.msg("Analyze VU run.\n")
+	
+	def term(self):
+		pass
+
+def PLUGIN_ENTRY():
+	return vu_helper_t()
