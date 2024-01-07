@@ -6,7 +6,7 @@ import ida_bytes
 import idc
 import binascii
 
-MAKE_CREFS = 1
+MAKE_CREFS = 0
 
 def get_special_bit(instruction):
 
@@ -657,6 +657,8 @@ def lower1_special(address, instruction):
 		ercpr(address, instruction)
 	elif (op == 0x7B):
 		set_manual_insn(address, "waitp")
+	elif (op == 0x7C):
+		esin(address, instruction)
 	elif (op == 0x7D):
 		eatan(address, instruction)
 	elif (op == 0x7E):
