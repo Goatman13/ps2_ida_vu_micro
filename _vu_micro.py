@@ -70,6 +70,20 @@ def get_4bit_field(field):
 		warning("Opcode is missing field!")
 		return "xyzw"
 
+def get_vu1_reg_for_vu0(imm):
+
+	spec_regs = ["status", "mac", "clip", "vi19", "R", "I", "Q", "P", "vi24_reserved", "vi25_reserved",
+				"TPC", "vi27_reserved", "vi28_reserved", "vi29_reserved", "vi30_reserved", "vi31_reserved"]
+	imm &= 0x3F
+	if (imm < 0x20):
+		return "vu1_vf{:d}".format(imm)
+	elif (imm < 0x30):
+		imm -= 0x20
+		return "vu1_vi{:d}".format(imm)
+	else:
+		imm -= 0x30
+		return "vu1_" + spec_regs[imm]
+
 def itof(address, instr, dest, source, field, sbits):
 	
 	field2 = get_4bit_field(field)
@@ -664,7 +678,7 @@ def lower1_special(address, instruction):
 	elif (op == 0x7E):
 		eexp(address, instruction)
 	else:
-		print("Bad op cop2_special2")
+		print("Bad op cop2_special2 0x{:X}".format(op))
 
 def mfp(address, instruction):
 
@@ -871,18 +885,26 @@ def lower2(address, instruction):
 def loadstore_imm(address, string, instruction):
 
 	sign = ""
-	imm = instruction & 0x7FF
-	if (imm > 0x3FF):
-		imm = ~imm
-		imm &= 0x3FF
-		imm += 1
-		sign = "-"
-	imm *= 16 
 	_is = (instruction >> 11) & 0x1F
 	it = (instruction >> 16) & 0x1F
 	field = (instruction >> 21) & 0xF
 	field2 = get_4bit_field(field)
-	
+	imm = instruction & 0x7FF
+	if (imm > 0x3FF and _is != 0):
+		imm = ~imm
+		imm &= 0x3FF
+		imm += 1
+		sign = "-"
+	elif (imm > 0x3FF and _is == 0):
+		vu1_reg = get_vu1_reg_for_vu0(imm)
+		while len(string + "." + field2) < 13:
+			field2 += " "	
+		string = string + "." + field2 + " vi{:d}, " + vu1_reg
+
+		#set_cmt(address, "load store " + vu1_reg, 0)
+		set_manual_insn(address, string.format(it))
+		return
+	imm *= 16
 	while len(string + "." + field2) < 13:
 		field2 += " "	
 	
@@ -973,17 +995,25 @@ def branch_zero(address, string, instruction):
 def lq(address, instruction):
 
 	sign = ""
-	imm = instruction & 0x7FF
-	if (imm > 0x3FF):
-		imm = ~imm
-		imm &= 0x3FF
-		imm += 1
-		sign = "-"
-	imm *= 16 
 	_is = (instruction >> 11) & 0x1F
 	ft = (instruction >> 16) & 0x1F
 	field = (instruction >> 21) & 0xF
 	field2 = get_4bit_field(field)	
+	imm = instruction & 0x7FF
+	if (imm > 0x3FF and _is != 0):
+		imm = ~imm
+		imm &= 0x3FF
+		imm += 1
+		sign = "-"
+	elif (imm > 0x3FF and _is == 0):
+		vu1_reg = get_vu1_reg_for_vu0(imm)
+		while len("lq." + field2) < 13:
+			field2 += " "
+		string = "lq." + field2 + " vf{:d}, " + vu1_reg
+		set_manual_insn(address, string.format(ft))
+		#set_cmt(address, "download from " + vu1_reg, 0)
+		return
+	imm *= 16 
 
 	while len("lq." + field2) < 13:
 		field2 += " "
@@ -995,17 +1025,25 @@ def lq(address, instruction):
 def sq(address, instruction):
 
 	sign = ""
+	it = (instruction >> 16) & 0x1F
+	fs = (instruction >> 11) & 0x1F
+	field = (instruction >> 21) & 0xF
+	field2 = get_4bit_field(field)
 	imm = instruction & 0x7FF
-	if (imm > 0x3FF):
+	if (imm > 0x3FF and it != 0):
 		imm = ~imm
 		imm &= 0x3FF
 		imm += 1
 		sign = "-"
+	elif (imm > 0x3FF and it == 0):
+		vu1_reg = get_vu1_reg_for_vu0(imm)
+		while len("sq." + field2) < 13:
+			field2 += " "
+		string = "sq." + field2 + " vf{:d}, " + vu1_reg
+		set_manual_insn(address, string.format(fs))
+		#set_cmt(address, "upload to " + vu1_reg, 0)
+		return
 	imm *= 16 
-	fs = (instruction >> 11) & 0x1F
-	it = (instruction >> 16) & 0x1F
-	field = (instruction >> 21) & 0xF
-	field2 = get_4bit_field(field)
 
 	while len("sq." + field2) < 13:
 		field2 += " "
@@ -1172,17 +1210,44 @@ def jalr(address, instruction):
 	string = "jalr          vi{:d}, vi{:d}"
 	set_manual_insn(address, string.format(link_reg, addr_reg))
 
+def new_skip_vif_data(start, end):
+	
+	to_skip = 0
+	addr = start
+	while (start < end):
+		if start < ida_idaapi.BADADDR:
+			if get_dword(addr + 4) >> 31 == 1: #loi
+				addr += 4
+				continue
+			instruction = get_dword(addr)
+			instruction >>= 24
+			instruction &= 0x7F
+			if instruction == 0:
+				end += 4
+			elif instruction > 0x5F: # unpack
+				end += 4
+			elif instruction == 0x4A:
+				prev_ins = get_dword(addr - 4) >> 24
+				next_ins = get_dword(addr + 4) >> 24
+				if prev_ins != 0 or prev_ins < 0x60 or next_ins != 0 or next_ins < 0x60:
+					continue
+				
+				
 
+
+# todo 4A is fucking jalr..
+# maybe check before/after opcode validity
 def skip_vif_data(start, end):
 	
 	to_skip = 0
 	while (start < end):
 		if start < ida_idaapi.BADADDR:
 			if ((is_code(ida_bytes.get_flags(start)) == 1)):
-				print("wrong branch address, wrap?")
+				print("wrong branch address, wrap around VU mem?")
 				return to_skip
 			instruction = get_dword(start)
 			end_instr = get_dword(end)
+			# add check for loi here, 0.0 is not that rare
 			while end_instr == 0x70000000 or end_instr == 0:
 				end += 4
 				end_instr = get_dword(end)
@@ -1339,9 +1404,16 @@ def mulai(address, instruction):
 
 def clip(address, instruction):
 
+	instr = "clipw."
 	reg1 = (instruction >> 11) & 0x1F
 	reg2 = (instruction >> 16) & 0x1F
-	string = "clipw.xyz     vf{:d}, vf{:d}w"
+	field = (instruction >> 21) & 0xF
+	field = get_4bit_field(field)
+	if field != "xyz":
+		print("mVU WARNING: Clip instruction with malfolmed dest at 0x{:X}!".format(address))
+	while len(instr + field) < 13:
+		field += " "
+	string = instr + field + " vf{:d}, vf{:d}w"
 	set_manual_insn(address, string.format(reg1, reg2))	
 
 def addaq(address, instruction):
@@ -1691,12 +1763,93 @@ def mark_code(address, end):
 				continue
 			
 			#print(hex(address))
-			#if ((is_code(ida_bytes.get_flags(address)) == 1)):
+			#Try detect DMA and VIF code and skip it.
+			#At the same time we can comment it for readability.
+			previous_op = get_dword(address - 4)
 			instruction = get_dword(address)
 			old = address
-			if (instruction >> 24) == 0x70 or (instruction >> 24) == 0x60:
+			if (instruction >> 24) == 0x70 or (instruction >> 24) == 0x60 and instruction & 0xFFF != 0x2FF:
+				TAG_TYPE = (instruction >> 28) & 7
+				if TAG_TYPE == 7:
+					TAG_TYPE = "END"
+				elif TAG_TYPE == 6:
+					TAG_TYPE = "RET"
+				else:
+					TAG_TYPE = "UNK" # Unreachable for now.
+				del_items(address)
+				create_dword(address)
+				del_items(address + 4)
+				create_dword(address + 4)
+				dma_qwc = (instruction & 0xFFFF)
+				dma_addr = get_dword(address + 4)
+				set_cmt(address, "DMA TAG      " + TAG_TYPE + " QWC=0x{:X}".format(dma_qwc), 0)
+				set_cmt(address + 4, "DMA TAG      ADDR=0x{:X}".format(dma_addr), 0)
+				address += 8
+				#Skip as non VU code everything until VIF MPG is found,
+				#or until we reach end address.
 				while (get_dword(address) >> 24) != 0x4A and address <= end:
 					create_dword(address)
+					instruction = get_dword(address)
+					vif_code = (instruction >> 24) & 0x7F
+					if vif_code == 0x00:
+						vif_cmd = "VIF NOP"
+					elif vif_code == 0x01:
+						cycle_cl = instruction & 0xF
+						cycle_wl = (instruction >> 8) & 0xF
+						vif_cmd = "VIF STCYCL   WL=0x{:X}, CL=0x{:X}".format(cycle_wl, cycle_cl)
+					elif vif_code == 0x02:
+						vif_ofst = instruction & 0x3FF
+						vif_cmd = "VIF OFFSET   OFST=0x{:X}".format(vif_ofst)
+					elif vif_code == 0x03:
+						vif_base = instruction & 0x3FF
+						vif_cmd = "VIF BASE     BASE=0x{:X}".format(vif_base)
+					elif vif_code == 0x04:
+						vif_itop = instruction & 0x3FF
+						vif_cmd = "VIF ITOP     ITOP=0x{:X}".format(vif_itop)
+					elif vif_code == 0x05:
+						stmod_mode = instruction & 0x3
+						vif_cmd = "VIF STMOD    MODE=0x{:X}".format(stmod_mode)
+					elif vif_code == 0x06:
+						vif_cmd = "VIF MSKPATH3"
+					elif vif_code == 0x07:
+						vif_cmd = "VIF MARK"
+					elif vif_code == 0x10:
+						#Likely not DMA TAG
+						if instruction == 0x10000000:
+							vif_cmd = "VIF FLUSHE"
+						#likely DMA TAG
+						else:
+							dma_qwc = (instruction & 0xFFFF) 
+							set_cmt(address, "DMA TAG      CNT QWC=0x{:X}".format(dma_qwc), 0)
+							address += 4
+							dma_addr = get_dword(address)
+							vif_cmd = "DMA TAG      ADDR=0x{:X}".format(dma_addr)
+					elif vif_code == 0x11:
+						vif_cmd = "VIF FLUSH"
+					elif vif_code == 0x13:
+						vif_cmd = "VIF FLUSHA"
+					elif vif_code == 0x14:
+						vif_cmd = "VIF MSCAL"
+					elif vif_code == 0x15:
+						vif_cmd = "VIF MSCALF"
+					elif vif_code == 0x17:
+						vif_cmd = "VIF MSCNT"
+					elif vif_code == 0x20:
+						set_cmt(address, "VIF STMASK", 0)
+						address += 4
+						stmask_data = get_dword(address)
+						vif_cmd = "VIF STMASK   DATA=0x{:08X}".format(stmask_data)
+					elif vif_code == 0x30:
+						vif_cmd = "VIF STROW"
+					elif vif_code == 0x31:
+						vif_cmd = "VIF STCOL"
+					elif vif_code == 0x50:
+						vif_cmd = "VIF DIRECT"
+					elif vif_code == 0x51:
+						vif_cmd = "VIF DIRECTHL"
+					else:
+						vif_cmd = ""
+					set_cmt(address, vif_cmd, 0)
 					address += 4
 				continue
 				
@@ -1704,9 +1857,20 @@ def mark_code(address, end):
 				create_dword(address)
 				address += 4
 				continue
-				
-			if (instruction >> 24) == 0x4A:
+			
+			#Todo check jalr
+			if (instruction >> 24) == 0x4A and previous_op == 0:
 				create_dword(address)
+				vif_size = (instruction >> 16) & 0xFF
+				if vif_size == 0:
+					vif_size = 0x100
+				vif_size *= 8
+				vif_addr = (instruction & 0xFFFF) * 8
+				vif_addr &= 0x3FF8 #Wrong for VU0, but better than nothing. 
+				comment = "VIF MPG      SIZE=0x{:X}, ADDRESS=0x{:X}"
+				set_cmt(address, comment.format(vif_size, vif_addr), 0)
+				create_dword(address - 4)
+				set_cmt(address - 4, "VIF NOP", 0)				
 				address += 4
 				continue
 			
@@ -1723,13 +1887,6 @@ def mark_code(address, end):
 		address += 4
 	return 0
 
-def vu_helper(start):
-	
-	end = start + calculate_mpg_size(start)
-	print(hex(start))
-	print(hex(end))
-	mark_code(start, end)
-
 def vu_single_line():
 	
 	start_addr = read_selection_start()
@@ -1743,8 +1900,11 @@ def vu_single_line():
 def vu_mpg_4A():
 	
 	ea = get_screen_ea()
-	if (get_dword(ea) >> 24) == 0x4A:
-		vu_helper(get_screen_ea())
+	if (get_dword(ea) >> 24) == 0x4A:	
+		end = ea + calculate_mpg_size(ea)
+		print(hex(ea))
+		print(hex(end))
+		mark_code(ea, end)
 		
 	else:
 		print("To start plugin you need to specify line with VIF MPG command")
