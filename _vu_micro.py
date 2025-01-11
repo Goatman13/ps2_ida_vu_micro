@@ -6,7 +6,7 @@ import ida_bytes
 import idc
 import binascii
 
-MAKE_CREFS = 0
+MAKE_CREFS = 1
 
 def get_special_bit(instruction):
 
@@ -574,6 +574,12 @@ def upper_special(address, instruction):
 
 def lower(address, instruction):
 
+	# Early check for I bit to prevent
+	# branch code from creating xref.
+	is_Ibit = get_dword(address + 4)
+	if ((is_Ibit >> 31) == 1):
+		return
+
 	if (instruction == 0x8000033C):
 		set_manual_insn(address,"nop")
 		return
@@ -991,6 +997,75 @@ def branch_zero(address, string, instruction):
 	string = string + " vi{:d}, 0x{:X}"
 	set_manual_insn(address, string.format(reg, addr))
 
+def b(address, instruction):
+
+	imm = instruction & 0x7FF
+	if (imm > 0x3FF):
+		imm &= 0x3FF
+		imm = ~imm
+		imm &= 0x3FF
+		imm *= 8
+		addr = (address - imm)
+		addr -= skip_vif_data(addr, address)
+		if(MAKE_CREFS == 1):
+			add_cref(address, addr, fl_JN | XREF_USER)
+		string = "b             0x{:X}"
+		set_manual_insn(address, string.format(addr))
+		return
+	
+	imm *= 8
+	addr = address + imm + 8
+	addr += skip_vif_data(address, addr)
+	if(MAKE_CREFS == 1):
+		add_cref(address, addr, fl_JN | XREF_USER)	
+	string = "b             0x{:X}"
+	set_manual_insn(address, string.format(addr))
+
+
+def bal(address, instruction):
+
+	imm = instruction & 0x7FF
+	link_reg = (instruction >> 16) & 0x1F
+	if (imm > 0x3FF):
+		imm &= 0x3FF
+		imm = ~imm
+		imm &= 0x3FF
+		imm *= 8
+		addr = (address - imm)
+		addr -= skip_vif_data(addr, address)
+		if(MAKE_CREFS == 1):
+			add_cref(address, addr, fl_CN | XREF_USER)		
+		string = "bal           vi{:d} 0x{:X}"
+		set_manual_insn(address, string.format(link_reg, addr))
+		return
+	
+	imm *= 8	
+	addr = address + imm + 8
+	addr += skip_vif_data(address, addr)
+	if(MAKE_CREFS == 1):
+		add_cref(address, addr, fl_JN | XREF_USER)		
+	string = "bal           vi{:d} 0x{:X}"
+	set_manual_insn(address, string.format(link_reg, addr))
+
+
+def jr(address, instruction):
+
+	addr_reg = (instruction >> 11) & 0x1F
+	#if(MAKE_CREFS == 1):
+	#	add_cref(address, addr, fl_JN | XREF_USER)
+	string = "jr            vi{:d}"
+	set_manual_insn(address, string.format(addr_reg))
+
+
+def jalr(address, instruction):
+
+	addr_reg = (instruction >> 11) & 0x1F
+	link_reg = (instruction >> 16) & 0x1F
+	#if(MAKE_CREFS == 1):
+	#	add_cref(address, addr, fl_CN | XREF_USER)
+	string = "jalr          vi{:d}, vi{:d}"
+	set_manual_insn(address, string.format(link_reg, addr_reg))
+
 
 def lq(address, instruction):
 
@@ -1142,74 +1217,6 @@ def fcget(address, instruction):
 	set_manual_insn(address, string.format(it))
 
 
-def b(address, instruction):
-
-	imm = instruction & 0x7FF
-	if (imm > 0x3FF):
-		imm &= 0x3FF
-		imm = ~imm
-		imm &= 0x3FF
-		imm *= 8
-		addr = (address - imm)
-		addr -= skip_vif_data(addr, address)
-		if(MAKE_CREFS == 1):
-			add_cref(address, addr, fl_JN | XREF_USER)
-		string = "b             0x{:X}"
-		set_manual_insn(address, string.format(addr))
-		return
-	
-	imm *= 8
-	addr = address + imm + 8
-	addr += skip_vif_data(address, addr)
-	if(MAKE_CREFS == 1):
-		add_cref(address, addr, fl_JN | XREF_USER)	
-	string = "b             0x{:X}"
-	set_manual_insn(address, string.format(addr))
-
-
-def bal(address, instruction):
-
-	imm = instruction & 0x7FF
-	link_reg = (instruction >> 16) & 0x1F
-	if (imm > 0x3FF):
-		imm &= 0x3FF
-		imm = ~imm
-		imm &= 0x3FF
-		imm *= 8
-		addr = (address - imm)
-		addr -= skip_vif_data(addr, address)
-		if(MAKE_CREFS == 1):
-			add_cref(address, addr, fl_CN | XREF_USER)		
-		string = "bal           vi{:d} 0x{:X}"
-		set_manual_insn(address, string.format(link_reg, addr))
-		return
-	
-	imm *= 8	
-	addr = address + imm + 8
-	addr += skip_vif_data(address, addr)
-	
-	string = "bal           vi{:d} 0x{:X}"
-	set_manual_insn(address, string.format(link_reg, addr))
-
-
-def jr(address, instruction):
-
-	addr_reg = (instruction >> 11) & 0x1F
-	#if(MAKE_CREFS == 1):
-	#	add_cref(address, addr, fl_JN | XREF_USER)
-	string = "jr            vi{:d}"
-	set_manual_insn(address, string.format(addr_reg))
-
-
-def jalr(address, instruction):
-
-	addr_reg = (instruction >> 11) & 0x1F
-	link_reg = (instruction >> 16) & 0x1F
-	#if(MAKE_CREFS == 1):
-	#	add_cref(address, addr, fl_CN | XREF_USER)
-	string = "jalr          vi{:d}, vi{:d}"
-	set_manual_insn(address, string.format(link_reg, addr_reg))
-
 def new_skip_vif_data(start, end):
 	
 	to_skip = 0
@@ -1235,11 +1242,15 @@ def new_skip_vif_data(start, end):
 				
 
 
-# todo 4A is fucking jalr..
-# maybe check before/after opcode validity
 def skip_vif_data(start, end):
 	
 	to_skip = 0
+
+	# Check for addresses in VU range.
+	# Better avoid misdetection early.
+	if start < 0x4000 or start >= 0x11000000:
+		return to_skip
+
 	while (start < end):
 		if start < ida_idaapi.BADADDR:
 			if ((is_code(ida_bytes.get_flags(start)) == 1)):
@@ -1262,6 +1273,7 @@ def skip_vif_data(start, end):
 					if ((is_code(ida_bytes.get_flags(start)) == 1)):
 						print("wrong branch address, wrap?")
 						return to_skip
+				to_skip += 4 # Skip that 4A too.
 				start += 4
 				#to_skip += 4
 				continue
